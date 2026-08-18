@@ -1,22 +1,18 @@
-import { NextResponse } from 'next/server';
-import neo4j from 'neo4j-driver';
+import { NextResponse } from "next/server";
+import driver from "@/lib/neo4j";
 
-const uri = process.env.COGNODB_URI!;
-const user = process.env.COGNODB_USER || 'cognodb';
-const password = process.env.COGNODB_PASSWORD!;
-
-const driver = neo4j.driver(uri, neo4j.auth.basic(user, password));
+// Force dynamic execution so Vercel doesn't run this during build prerender
+export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const mode = searchParams.get('mode') || 'all';
-  const personId = searchParams.get('personId') || 'p2';
+  const mode = searchParams.get("mode") || "all";
+  const personId = searchParams.get("personId") || "p2";
 
-  const session = driver.session();
+  const session = driver.session({ defaultAccessMode: "READ" });
 
   try {
-    // Mode 1: 2-Hop Talent Recommendations
-    if (mode === 'recommend') {
+    if (mode === "recommend") {
       const recQuery = `
         MATCH (target:Person {id: $personId})-[:ACTED_IN]->(m:Movie)<-[:ACTED_IN]-(coActor:Person)
         MATCH (coActor)-[:ACTED_IN]->(recMovie:Movie)
@@ -31,16 +27,18 @@ export async function GET(request: Request) {
       `;
       const result = await session.run(recQuery, { personId });
       const recommendations = result.records.map((r) => ({
-        id: r.get('id'),
-        title: r.get('title'),
-        rating: r.get('rating'),
-        coActors: r.get('coActors'),
-        score: r.get('score').toNumber ? r.get('score').toNumber() : r.get('score'),
+        id: r.get("id"),
+        title: r.get("title"),
+        rating: r.get("rating"),
+        coActors: r.get("coActors"),
+        score: r.get("score").toNumber
+          ? r.get("score").toNumber()
+          : r.get("score"),
       }));
       return NextResponse.json({ success: true, recommendations });
     }
 
-    // Mode 2: Full Graph for Force-Directed Visualization
+    // Default graph
     const graphQuery = `
       MATCH (p:Person)-[r:ACTED_IN|DIRECTED]->(m:Movie)
       RETURN p.id AS sourceId, p.name AS sourceName, labels(p)[0] AS sourceType,
@@ -50,25 +48,41 @@ export async function GET(request: Request) {
     `;
 
     const result = await session.run(graphQuery);
-    const nodeMap = new Map<string, { id: string; name: string; type: string }>();
-    const links: Array<{ source: string; target: string; type: string; role?: string }> = [];
+    const nodeMap = new Map<
+      string,
+      { id: string; name: string; type: string }
+    >();
+    const links: Array<{
+      source: string;
+      target: string;
+      type: string;
+      role?: string;
+    }> = [];
 
     result.records.forEach((record) => {
-      const sId = record.get('sourceId');
-      const tId = record.get('targetId');
+      const sId = record.get("sourceId");
+      const tId = record.get("targetId");
 
       if (!nodeMap.has(sId)) {
-        nodeMap.set(sId, { id: sId, name: record.get('sourceName'), type: record.get('sourceType') });
+        nodeMap.set(sId, {
+          id: sId,
+          name: record.get("sourceName"),
+          type: record.get("sourceType"),
+        });
       }
       if (!nodeMap.has(tId)) {
-        nodeMap.set(tId, { id: tId, name: record.get('targetName'), type: record.get('targetType') });
+        nodeMap.set(tId, {
+          id: tId,
+          name: record.get("targetName"),
+          type: record.get("targetType"),
+        });
       }
 
       links.push({
         source: sId,
         target: tId,
-        type: record.get('relType'),
-        role: record.get('role'),
+        type: record.get("relType"),
+        role: record.get("role"),
       });
     });
 
@@ -78,8 +92,11 @@ export async function GET(request: Request) {
       links,
     });
   } catch (error: any) {
-    console.error('Graph API Error:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    console.error("Database connection error:", error);
+    return NextResponse.json(
+      { success: false, error: error.message || "Database unreachable" },
+      { status: 500 },
+    );
   } finally {
     await session.close();
   }
