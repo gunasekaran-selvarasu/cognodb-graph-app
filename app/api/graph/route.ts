@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
-import driver from "@/lib/neo4j";
+import neo4j from "neo4j-driver";
 
-// Force dynamic execution so Vercel doesn't run this during build prerender
-export const dynamic = "force-dynamic";
+const uri = process.env.COGNODB_URI!;
+const user = process.env.COGNODB_USER || "cognodb";
+const password = process.env.COGNODB_PASSWORD!;
+
+const driver = neo4j.driver(uri, neo4j.auth.basic(user, password));
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const mode = searchParams.get("mode") || "all";
   const personId = searchParams.get("personId") || "p2";
 
-  const session = driver.session({ defaultAccessMode: "READ" });
+  const session = driver.session();
 
   try {
+    // Mode 1: 2-Hop Talent Recommendations
     if (mode === "recommend") {
       const recQuery = `
         MATCH (target:Person {id: $personId})-[:ACTED_IN]->(m:Movie)<-[:ACTED_IN]-(coActor:Person)
@@ -38,7 +42,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: true, recommendations });
     }
 
-    // Default graph
+    // Mode 2: Full Graph for Force-Directed Visualization
     const graphQuery = `
       MATCH (p:Person)-[r:ACTED_IN|DIRECTED]->(m:Movie)
       RETURN p.id AS sourceId, p.name AS sourceName, labels(p)[0] AS sourceType,
@@ -92,9 +96,9 @@ export async function GET(request: Request) {
       links,
     });
   } catch (error: any) {
-    console.error("Database connection error:", error);
+    console.error("Graph API Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Database unreachable" },
+      { success: false, error: error.message },
       { status: 500 },
     );
   } finally {
